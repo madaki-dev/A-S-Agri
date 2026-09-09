@@ -10,40 +10,50 @@ exports.getDashboard = async (req, res) => {
 
     try {
 
-        const farmerId =
-            req.user._id;
+        const farmerId = req.user._id;
+
+        // ----------------------------------------------------
+        // Get this farmer's products
+        // ----------------------------------------------------
+
+        const products = await Product.find({
+            farmer: farmerId
+        }).sort({
+            createdAt: -1
+        });
 
 
-        const products =
-            await Product.find({
-                farmer: farmerId
-            }).sort({
+        // ----------------------------------------------------
+        // Get all orders
+        // ----------------------------------------------------
+
+        const orders = await Order.find()
+            .populate(
+                "buyer",
+                "fullName phone email whatsapp"
+            )
+            .populate({
+                path: "products.product",
+                populate: {
+                    path: "farmer",
+                    select: "fullName phone email"
+                }
+            })
+            .sort({
                 createdAt: -1
             });
 
 
-        const orders =
-            await Order.find()
-                .populate(
-                    "buyer",
-                    "fullName phone email"
-                )
-                .populate(
-                    "products.product"
-                )
-                .sort({
-                    createdAt: -1
-                });
-
-
-        let totalOrders = 0;
         let revenue = 0;
 
-        const sales = [];
+        const farmerOrders = [];
 
-        const countedOrders =
-            new Set();
+        const countedOrders = new Set();
 
+
+        // ----------------------------------------------------
+        // Find orders containing this farmer's products
+        // ----------------------------------------------------
 
         for (const order of orders) {
 
@@ -58,16 +68,22 @@ exports.getDashboard = async (req, res) => {
 
 
                 if (
-                    item.product.farmer.toString() !==
-                    farmerId.toString()
+                    item.product.farmer._id
+                        ? item.product.farmer._id.toString() !== farmerId.toString()
+                        : item.product.farmer.toString() !== farmerId.toString()
                 ) {
                     continue;
                 }
 
 
-                const itemRevenue =
-                    Number(item.farmerPrice || 0) *
+                const quantity =
                     Number(item.quantity || 0);
+
+                const farmerPrice =
+                    Number(item.farmerPrice || 0);
+
+                const itemRevenue =
+                    farmerPrice * quantity;
 
 
                 revenue += itemRevenue;
@@ -78,52 +94,49 @@ exports.getDashboard = async (req, res) => {
                 );
 
 
-                sales.push({
+                farmerOrders.push({
 
                     orderId:
-                        order._id,
+                        order._id.toString(),
 
-                    buyer:
-                        order.buyer
-                            ? {
-                                fullName:
-                                    order.buyer.fullName,
+                    buyer: order.buyer
+                        ? {
+                            _id:
+                                order.buyer._id,
 
-                                phone:
-                                    order.buyer.phone,
+                            fullName:
+                                order.buyer.fullName,
 
-                                email:
-                                    order.buyer.email
-                            }
-                            : null,
+                            phone:
+                                order.buyer.phone,
+
+                            whatsapp:
+                                order.buyer.whatsapp,
+
+                            email:
+                                order.buyer.email
+                        }
+                        : null,
 
                     product:
                         item.product.productName,
 
-                    quantity:
-                        item.quantity,
+                    quantity,
 
-                    farmerPrice:
-                        item.farmerPrice,
+                    farmerPrice,
 
                     commission:
-                        item.commission,
+                        Number(item.commission || 0),
 
                     sellingPrice:
-                        item.sellingPrice,
+                        Number(item.sellingPrice || 0),
 
                     productTotal:
-                        Number(
-                            item.sellingPrice || 0
-                        ) *
-                        Number(
-                            item.quantity || 0
-                        ),
+                        Number(item.sellingPrice || 0) *
+                        quantity,
 
                     transportFee:
-                        Number(
-                            order.transportFee || 0
-                        ),
+                        Number(order.transportFee || 0),
 
                     delivery:
                         order.delivery,
@@ -138,15 +151,20 @@ exports.getDashboard = async (req, res) => {
         }
 
 
-        totalOrders =
+        const totalOrders =
             countedOrders.size;
 
+
+        // ----------------------------------------------------
+        // Response
+        // ----------------------------------------------------
 
         res.json({
 
             success: true,
 
-            totalProducts: products.length,
+            totalProducts:
+                products.length,
 
             totalOrders,
 
@@ -154,7 +172,9 @@ exports.getDashboard = async (req, res) => {
 
             products,
 
-            orders: sales
+            orders:
+                farmerOrders
+
         });
 
 
@@ -186,81 +206,72 @@ exports.updateStatus = async (req, res) => {
     try {
 
         const allowedStatuses = [
-
             "Pending",
-
             "Processing",
-
             "Shipped",
-
             "Delivered",
-
             "Cancelled"
         ];
 
 
-        const {
-            status
-        } = req.body;
+        const { status } = req.body;
 
 
-        if (
-            !allowedStatuses.includes(status)
-        ) {
+        if (!allowedStatuses.includes(status)) {
 
             return res.status(400).json({
-
-                message:
-                    "Invalid order status."
+                message: "Invalid order status."
             });
         }
 
 
-        const order =
-            await Order.findById(
-                req.params.id
-            ).populate(
-                "products.product"
-            );
+        const order = await Order.findById(
+            req.params.id
+        ).populate({
+            path: "products.product",
+            populate: {
+                path: "farmer"
+            }
+        });
 
 
         if (!order) {
 
             return res.status(404).json({
-
-                message:
-                    "Order not found."
+                message: "Order not found."
             });
         }
 
 
         const farmerOwnsProduct =
-            order.products.some(
-                item => {
+            order.products.some(item => {
 
-                    return (
-                        item.product &&
-                        item.product.farmer &&
-                        item.product.farmer.toString() ===
-                        req.user._id.toString()
-                    );
+                if (
+                    !item.product ||
+                    !item.product.farmer
+                ) {
+                    return false;
                 }
-            );
+
+                const farmerId =
+                    item.product.farmer._id ||
+                    item.product.farmer;
+
+                return farmerId.toString() ===
+                    req.user._id.toString();
+            });
 
 
         if (!farmerOwnsProduct) {
 
             return res.status(403).json({
-
                 message:
                     "You are not authorized to update this order."
             });
         }
 
 
-        order.status =
-            status;
-
+        order.status = status;
 
         await order.save();
 

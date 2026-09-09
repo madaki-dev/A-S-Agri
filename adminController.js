@@ -74,55 +74,106 @@ exports.getAllOrders = async (req, res) => {
 
             buyer: order.buyer
                 ? {
-                    _id: order.buyer._id,
-                    fullName: order.buyer.fullName,
-                    email: order.buyer.email,
-                    phone: order.buyer.phone,
-                    whatsapp: order.buyer.whatsapp
+                    _id:
+                        order.buyer._id,
+
+                    fullName:
+                        order.buyer.fullName,
+
+                    email:
+                        order.buyer.email,
+
+                    phone:
+                        order.buyer.phone,
+
+                    whatsapp:
+                        order.buyer.whatsapp
                 }
                 : null,
 
-            products: order.products.map(item => ({
+            products:
+                order.products.map(item => ({
 
-                product: item.product
-                    ? {
-                        _id: item.product._id,
-                        productName: item.product.productName,
-                        category: item.product.category,
-                        farmer: item.product.farmer
+                    product:
+                        item.product
                             ? {
-                                _id: item.product.farmer._id,
-                                fullName: item.product.farmer.fullName,
-                                phone: item.product.farmer.phone
+                                _id:
+                                    item.product._id,
+
+                                productName:
+                                    item.product.productName,
+
+                                category:
+                                    item.product.category,
+
+                                farmer:
+                                    item.product.farmer
+                                        ? {
+                                            _id:
+                                                item.product.farmer._id,
+
+                                            fullName:
+                                                item.product.farmer.fullName,
+
+                                            phone:
+                                                item.product.farmer.phone
+                                        }
+                                        : null
                             }
-                            : null
-                    }
-                    : null,
+                            : null,
 
-                quantity: item.quantity,
+                    quantity:
+                        item.quantity,
 
-                farmerPrice: item.farmerPrice,
+                    farmerPrice:
+                        item.farmerPrice,
 
-                commission: item.commission,
+                    commission:
+                        item.commission,
 
-                sellingPrice: item.sellingPrice,
+                    sellingPrice:
+                        item.sellingPrice,
 
-                subtotal:
-                    Number(item.sellingPrice || 0) *
-                    Number(item.quantity || 0)
-            })),
+                    subtotal:
+                        Number(item.sellingPrice || 0) *
+                        Number(item.quantity || 0)
 
-            totalAmount: order.totalAmount,
+                })),
 
-            transportFee: order.transportFee || 0,
+            totalAmount:
+                order.totalAmount,
 
-            delivery: order.delivery,
+            transportFee:
+                order.transportFee || 0,
 
-            status: order.status,
+            // Buyer delivery information
+            delivery: order.delivery
+                ? {
+                    fullname:
+                        order.delivery.fullname,
 
-            transactionId: order.transactionId,
+                    phone:
+                        order.delivery.phone,
 
-            createdAt: order.createdAt
+                    whatsapp:
+                        order.delivery.whatsapp,
+
+                    state:
+                        order.delivery.state,
+
+                    address:
+                        order.delivery.address
+                }
+                : null,
+
+            status:
+                order.status,
+
+            transactionId:
+                order.transactionId,
+
+            createdAt:
+                order.createdAt
 
         }));
 
