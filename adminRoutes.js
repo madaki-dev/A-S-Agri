@@ -14,6 +14,28 @@ const {
 
 } = require("./adminController");
 
+const {
+
+    getDashboard,
+
+    getAllOrders,
+
+    getPayouts
+
+} = require("./adminController");
+
+const {
+
+    getDashboard,
+
+    getAllOrders,
+
+    getPayouts,
+
+    markPayoutPaid
+
+} = require("./adminController");
+
 router.get(
 
     "/dashboard",
@@ -35,6 +57,30 @@ router.get(
     adminOnly,
 
     getAllOrders
+
+);
+
+router.get(
+
+    "/payouts",
+
+    protect,
+
+    adminOnly,
+
+    getPayouts
+
+);
+
+router.patch(
+
+    "/payouts/:orderId/:payoutId/paid",
+
+    protect,
+
+    adminOnly,
+
+    markPayoutPaid
 
 );
 

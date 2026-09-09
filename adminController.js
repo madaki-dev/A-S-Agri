@@ -187,3 +187,129 @@ exports.getAllOrders = async (req, res) => {
         });
     }
 };
+
+exports.getPayouts = async (req, res) => {
+    try {
+        const orders = await Order.find({
+            "farmerPayouts.0": { $exists: true }
+        })
+            .populate(
+                "farmerPayouts.farmer",
+                "fullName phone email"
+            )
+            .sort({ createdAt: -1 });
+
+        const payouts = [];
+
+        for (const order of orders) {
+
+            for (const payout of order.farmerPayouts) {
+
+                payouts.push({
+                    _id: payout._id,
+
+                    orderId: order._id,
+
+                    farmer: payout.farmer
+                        ? {
+                            _id: payout.farmer._id,
+                            fullName: payout.farmer.fullName,
+                            phone: payout.farmer.phone,
+                            email: payout.farmer.email
+                        }
+                        : {
+                            _id: payout.farmer,
+                            fullName: payout.farmerName,
+                            phone: payout.farmerPhone
+                        },
+
+                    farmerEarnings:
+                        Number(payout.amount || 0),
+
+                    commission:
+                        Number(payout.commission || 0),
+
+                    farmerConfirmation: {
+                        farmerName: payout.farmerName,
+                        farmerPhone: payout.farmerPhone,
+                        accountNumber: payout.accountNumber,
+                        bankName: payout.bankName,
+                        accountName: payout.accountName
+                    },
+
+                    status: payout.status,
+
+                    paidAt: payout.paidAt,
+
+                    createdAt: order.createdAt
+                });
+            }
+        }
+
+        res.json({
+            success: true,
+            payouts
+        });
+
+    } catch (error) {
+
+        console.error(
+            "ADMIN PAYOUTS ERROR:",
+            error
+        );
+
+        res.status(500).json({
+            message: error.message || "Server error."
+        });
+    }
+};
+
+exports.markPayoutPaid = async (req, res) => {
+    try {
+        const { orderId, payoutId } = req.params;
+
+        const order = await Order.findById(orderId);
+
+        if (!order) {
+            return res.status(404).json({
+                message: "Order not found."
+            });
+        }
+
+        const payout = order.farmerPayouts.id(payoutId);
+
+        if (!payout) {
+            return res.status(404).json({
+                message: "Payout not found."
+            });
+        }
+
+        if (payout.status === "Paid") {
+            return res.status(400).json({
+                message: "This payout has already been marked as paid."
+            });
+        }
+
+        payout.status = "Paid";
+        payout.paidAt = new Date();
+
+        await order.save();
+
+        res.json({
+            success: true,
+            message: "Payout marked as paid.",
+            payout
+        });
+
+    } catch (error) {
+
+        console.error(
+            "MARK PAYOUT PAID ERROR:",
+            error
+        );
+
+        res.status(500).json({
+            message: error.message || "Server error."
+        });
+    }
+};

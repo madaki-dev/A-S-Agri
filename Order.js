@@ -105,33 +105,63 @@ const orderSchema = new mongoose.Schema({
         }
     },
 
-    farmerConfirmation: {
+    farmerPayouts: [
+        {
+            farmer: {
+                type: mongoose.Schema.Types.ObjectId,
+                ref: "User",
+                required: true
+            },
 
-        farmerName: {
-            type: String,
-            trim: true
-        },
+            farmerName: {
+                type: String,
+                trim: true
+            },
 
-        farmerPhone: {
-            type: String,
-            trim: true
-        },
+            farmerPhone: {
+                type: String,
+                trim: true
+            },
 
-        accountNumber: {
-            type: String,
-            trim: true
-        },
+            accountNumber: {
+                type: String,
+                trim: true
+            },
 
-        bankName: {
-            type: String,
-            trim: true
-        },
+            bankName: {
+                type: String,
+                trim: true
+            },
 
-        accountName: {
-            type: String,
-            trim: true
+            accountName: {
+                type: String,
+                trim: true
+            },
+
+            amount: {
+                type: Number,
+                required: true,
+                min: 0
+            },
+
+            commission: {
+                type: Number,
+                required: true,
+                min: 0
+            },
+
+            status: {
+                type: String,
+                enum: ["Pending", "Paid"],
+                default: "Pending"
+            },
+
+            paidAt: {
+                type: Date,
+                default: null
+            }
         }
-    }
+    ]
 
 }, {
     timestamps: true
