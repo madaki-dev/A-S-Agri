@@ -23,7 +23,6 @@ const adminRoutes = require("./adminRoutes");
 const farmerDashboardRoutes = require("./farmerDashboardRoutes");
 const profileRoutes = require("./profileRoutes");
 const contactRoutes = require("./contactRoutes");
-const adminRoutes = require("./adminRoutes");
 
 
 const app = express();
