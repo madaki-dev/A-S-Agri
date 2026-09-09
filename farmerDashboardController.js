@@ -146,8 +146,7 @@ exports.getDashboard = async (req, res) => {
 
             success: true,
 
-            totalProducts:
-                products.length,
+            totalProducts: products.length,
 
             totalOrders,
 
@@ -155,7 +154,7 @@ exports.getDashboard = async (req, res) => {
 
             products,
 
-            sales
+            orders: sales
         });
 
 
