@@ -177,8 +177,6 @@ exports.getFarmerSales = async (req, res) => {
     }
 };
 
-
-
 // ============================================================
 // FARMER CONFIRMS PAYMENT DETAILS
 // ============================================================
@@ -196,6 +194,10 @@ exports.confirmFarmerDetails = async (req, res) => {
         } = req.body;
 
 
+        // ----------------------------------------------------
+        // Validate payout details
+        // ----------------------------------------------------
+
         if (
             !farmerName ||
             !farmerPhone ||
@@ -208,9 +210,14 @@ exports.confirmFarmerDetails = async (req, res) => {
 
                 message:
                     "All farmer payment details are required."
+
             });
         }
 
+
+        // ----------------------------------------------------
+        // Find order and populate products
+        // ----------------------------------------------------
 
         const order =
             await Order.findById(
@@ -226,68 +233,267 @@ exports.confirmFarmerDetails = async (req, res) => {
 
                 message:
                     "Order not found."
+
             });
         }
 
 
         // ----------------------------------------------------
-        // Make sure this farmer actually owns a product
+        // Current farmer
+        // ----------------------------------------------------
+
+        const farmerId =
+            req.user._id.toString();
+
+
+        // ----------------------------------------------------
+        // Find all products in this order belonging
+        // to the logged-in farmer
+        // ----------------------------------------------------
+
+        const farmerItems =
+            order.products.filter(item => {
+
+                if (
+                    !item.product ||
+                    !item.product.farmer
+                ) {
+                    return false;
+                }
+
+
+                return (
+                    item.product.farmer.toString() ===
+                    farmerId
+                );
+
+            });
+
+
+        // ----------------------------------------------------
+        // Make sure farmer actually has a product
         // in this order
         // ----------------------------------------------------
 
-        const farmerOwnsOrderProduct =
-            order.products.some(
-                item => {
-
-                    return (
-                        item.product &&
-                        item.product.farmer &&
-                        item.product.farmer.toString() ===
-                        req.user._id.toString()
-                    );
-                }
-            );
-
-
-        if (!farmerOwnsOrderProduct) {
+        if (!farmerItems.length) {
 
             return res.status(403).json({
 
                 message:
                     "You are not authorized to confirm details for this order."
+
             });
         }
 
 
-        order.farmerConfirmation = {
+        // ----------------------------------------------------
+        // Calculate this farmer's earnings
+        // and A&S commission
+        // ----------------------------------------------------
 
-            farmerName:
-                farmerName.trim(),
+        let farmerAmount = 0;
+        let commissionAmount = 0;
 
-            farmerPhone:
-                farmerPhone.trim(),
 
-            accountNumber:
-                accountNumber.trim(),
+        for (const item of farmerItems) {
 
-            bankName:
-                bankName.trim(),
+            const quantity =
+                Number(item.quantity || 0);
 
-            accountName:
-                accountName.trim()
-        };
 
+            farmerAmount +=
+                Number(item.farmerPrice || 0) *
+                quantity;
+
+
+            commissionAmount +=
+                Number(item.commission || 0) *
+                quantity;
+
+        }
+
+
+        // ----------------------------------------------------
+        // Make sure farmerPayouts exists
+        // ----------------------------------------------------
+
+        if (!Array.isArray(order.farmerPayouts)) {
+
+            order.farmerPayouts = [];
+
+        }
+
+
+        // ----------------------------------------------------
+        // Check whether this farmer already has
+        // a payout record for this order
+        // ----------------------------------------------------
+
+        let payout =
+            order.farmerPayouts.find(p => {
+
+                return (
+                    p.farmer &&
+                    p.farmer.toString() ===
+                    farmerId
+                );
+
+            });
+
+
+        // ----------------------------------------------------
+        // Update existing payout
+        // ----------------------------------------------------
+
+        if (payout) {
+
+            payout.farmerName =
+                farmerName.trim();
+
+            payout.farmerPhone =
+                farmerPhone.trim();
+
+            payout.accountNumber =
+                accountNumber.trim();
+
+            payout.bankName =
+                bankName.trim();
+
+            payout.accountName =
+                accountName.trim();
+
+            payout.amount =
+                farmerAmount;
+
+            payout.commission =
+                commissionAmount;
+
+
+            // Don't reset an already-paid payout
+            if (payout.status !== "Paid") {
+
+                payout.status =
+                    "Pending";
+
+                payout.paidAt =
+                    null;
+
+            }
+
+        }
+
+
+        // ----------------------------------------------------
+        // Create new payout
+        // ----------------------------------------------------
+
+        else {
+
+            order.farmerPayouts.push({
+
+                farmer:
+                    req.user._id,
+
+                farmerName:
+                    farmerName.trim(),
+
+                farmerPhone:
+                    farmerPhone.trim(),
+
+                accountNumber:
+                    accountNumber.trim(),
+
+                bankName:
+                    bankName.trim(),
+
+                accountName:
+                    accountName.trim(),
+
+                amount:
+                    farmerAmount,
+
+                commission:
+                    commissionAmount,
+
+                status:
+                    "Pending",
+
+                paidAt:
+                    null
+
+            });
+
+        }
+
+
+        // ----------------------------------------------------
+        // Save order
+        // ----------------------------------------------------
 
         await order.save();
 
 
+        // ----------------------------------------------------
+        // Get the saved payout
+        // ----------------------------------------------------
+
+        const savedPayout =
+            order.farmerPayouts.find(p => {
+
+                return (
+                    p.farmer &&
+                    p.farmer.toString() ===
+                    farmerId
+                );
+
+            });
+
+
         res.json({
 
-            message:
-                "Farmer details confirmed successfully.",
+            success:
+                true,
 
-            confirmation:
-                order.farmerConfirmation
+            message:
+                "Farmer payout details saved successfully.",
+
+            payout: {
+
+                _id:
+                    savedPayout._id,
+
+                farmer:
+                    savedPayout.farmer,
+
+                farmerName:
+                    savedPayout.farmerName,
+
+                farmerPhone:
+                    savedPayout.farmerPhone,
+
+                accountNumber:
+                    savedPayout.accountNumber,
+
+                bankName:
+                    savedPayout.bankName,
+
+                accountName:
+                    savedPayout.accountName,
+
+                amount:
+                    savedPayout.amount,
+
+                commission:
+                    savedPayout.commission,
+
+                status:
+                    savedPayout.status,
+
+                paidAt:
+                    savedPayout.paidAt
+
+            }
+
         });
 
 
@@ -304,6 +510,9 @@ exports.confirmFarmerDetails = async (req, res) => {
             message:
                 error.message ||
                 "Server error."
+
         });
+
     }
+
 };
