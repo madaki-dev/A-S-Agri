@@ -201,7 +201,7 @@ exports.initializePayment = async (req, res) => {
                         "NGN",
 
                     redirect_url:
-                        "https://a-s-ventures.vercel.app/payment-success.html",
+                        `${process.env.FRONTEND_URL}/payment-success.html`,
 
                     customer: {
                         email:
