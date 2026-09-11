@@ -1,4 +1,5 @@
 const Order = require("./Order");
+const Product = require("./product");
 
 
 // ============================================================
@@ -55,92 +56,123 @@ exports.getMyOrders = async (req, res) => {
 // ============================================================
 
 exports.getFarmerSales = async (req, res) => {
-
     try {
+        const farmerId = req.user._id;
 
-        const farmerId =
-            req.user._id;
+        // Find products owned by this farmer
+        const farmerProducts = await Product.find({
+            farmer: farmerId
+        }).select("_id");
 
+        const productIds =
+            farmerProducts.map(product => product._id);
 
-        const orders =
-            await Order.find()
-                .populate(
-                    "products.product"
-                )
-                .populate(
-                    "buyer",
-                    "fullName email phone"
-                )
-                .sort({
-                    createdAt: -1
-                });
+        if (!productIds.length) {
+            return res.json([]);
+        }
 
+        // Find orders containing those products
+        const orders = await Order.find({
+            "products.product": {
+                $in: productIds
+            }
+        })
+            .populate(
+                "products.product"
+            )
+            .populate(
+                "buyer",
+                "fullName email phone whatsapp"
+            )
+            .sort({
+                createdAt: -1
+            });
 
         const sales = [];
-
 
         for (const order of orders) {
 
             for (const item of order.products) {
 
-                if (
-                    !item.product ||
-                    !item.product.farmer
-                ) {
+                if (!item.product) {
                     continue;
                 }
 
+                const productFarmer =
+                    item.product.farmer;
+
+                if (!productFarmer) {
+                    continue;
+                }
 
                 if (
-                    item.product.farmer.toString() !==
+                    productFarmer.toString() !==
                     farmerId.toString()
                 ) {
                     continue;
                 }
 
+                const quantity =
+                    Number(item.quantity || 0);
+
+                const farmerPrice =
+                    Number(item.farmerPrice || 0);
+
+                const commission =
+                    Number(item.commission || 0);
+
+                const sellingPrice =
+                    Number(item.sellingPrice || 0);
 
                 sales.push({
 
                     orderId:
                         order._id,
 
-                    buyer: {
+                    transactionId:
+                        order.transactionId,
 
+                    buyer: {
                         fullName:
-                            order.buyer?.fullName ||
-                            "",
+                            order.buyer?.fullName || "",
 
                         email:
-                            order.buyer?.email ||
-                            "",
+                            order.buyer?.email || "",
 
                         phone:
-                            order.buyer?.phone ||
-                            ""
+                            order.buyer?.phone || "",
+
+                        whatsapp:
+                            order.buyer?.whatsapp || ""
                     },
 
                     product:
                         item.product.productName,
 
-                    quantity:
-                        item.quantity,
+                    productId:
+                        item.product._id,
 
-                    farmerPrice:
-                        item.farmerPrice,
+                    quantity,
 
-                    commission:
-                        item.commission,
+                    farmerPrice,
+
+                    commission,
+
+                    sellingPrice,
 
                     amount:
-                        Number(
-                            item.farmerPrice
-                        ) *
-                        Number(
-                            item.quantity
-                        ),
+                        farmerPrice * quantity,
+
+                    commissionTotal:
+                        commission * quantity,
+
+                    productTotal:
+                        sellingPrice * quantity,
 
                     transportFee:
-                        order.transportFee || 0,
+                        Number(
+                            order.transportFee || 0
+                        ),
 
                     delivery:
                         order.delivery,
@@ -154,11 +186,7 @@ exports.getFarmerSales = async (req, res) => {
             }
         }
 
-
-        res.json(
-            sales
-        );
-
+        res.json(sales);
 
     } catch (error) {
 
@@ -166,7 +194,6 @@ exports.getFarmerSales = async (req, res) => {
             "GET FARMER SALES ERROR:",
             error
         );
-
 
         res.status(500).json({
 

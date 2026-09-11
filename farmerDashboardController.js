@@ -7,14 +7,12 @@ const Order = require("./Order");
 // ============================================================
 
 exports.getDashboard = async (req, res) => {
-
     try {
-
         const farmerId = req.user._id;
 
-        // ----------------------------------------------------
-        // Get this farmer's products
-        // ----------------------------------------------------
+        // ==========================================
+        // GET THIS FARMER'S PRODUCTS
+        // ==========================================
 
         const products = await Product.find({
             farmer: farmerId
@@ -22,59 +20,87 @@ exports.getDashboard = async (req, res) => {
             createdAt: -1
         });
 
+        const productIds = products.map(
+            product => product._id
+        );
 
-        // ----------------------------------------------------
-        // Get all orders
-        // ----------------------------------------------------
+        // ==========================================
+        // FIND ORDERS CONTAINING FARMER PRODUCTS
+        // ==========================================
 
-        const orders = await Order.find()
-            .populate(
-                "buyer",
-                "fullName phone email whatsapp"
-            )
-            .populate({
-                path: "products.product",
-                populate: {
-                    path: "farmer",
-                    select: "fullName phone email"
+        const orders = productIds.length
+            ? await Order.find({
+                "products.product": {
+                    $in: productIds
                 }
             })
-            .sort({
-                createdAt: -1
-            });
+                .populate(
+                    "buyer",
+                    "fullName phone email whatsapp"
+                )
+                .populate({
+                    path: "products.product",
+                    populate: {
+                        path: "farmer",
+                        select: "fullName phone email"
+                    }
+                })
+                .sort({
+                    createdAt: -1
+                })
+            : [];
 
+        // ======================================
+        // DEBUG
+        // ======================================
 
-        let revenue = 0;
+        console.log("FARMER ID:", farmerId.toString());
+
+        console.log(
+            "FARMER PRODUCT IDS:",
+            productIds.map(id => id.toString())
+        );
+
+        console.log(
+            "ORDERS FOUND:",
+            orders.length
+        );
+
+        // ==========================================
+        // BUILD FARMER ORDERS
+        // ==========================================
 
         const farmerOrders = [];
 
+        let revenue = 0;
+
         const countedOrders = new Set();
-
-
-        // ----------------------------------------------------
-        // Find orders containing this farmer's products
-        // ----------------------------------------------------
 
         for (const order of orders) {
 
             for (const item of order.products) {
 
-                if (
-                    !item.product ||
-                    !item.product.farmer
-                ) {
+                if (!item.product) {
                     continue;
                 }
 
+                // Make absolutely sure this product
+                // belongs to the logged-in farmer.
 
-                if (
-                    item.product.farmer._id
-                        ? item.product.farmer._id.toString() !== farmerId.toString()
-                        : item.product.farmer.toString() !== farmerId.toString()
-                ) {
+                const itemFarmer =
+                    item.product.farmer?._id ||
+                    item.product.farmer;
+
+                if (!itemFarmer) {
                     continue;
                 }
 
+                if (
+                    itemFarmer.toString() !==
+                    farmerId.toString()
+                ) {
+                    continue;
+                }
 
                 const quantity =
                     Number(item.quantity || 0);
@@ -82,17 +108,26 @@ exports.getDashboard = async (req, res) => {
                 const farmerPrice =
                     Number(item.farmerPrice || 0);
 
-                const itemRevenue =
+                const commission =
+                    Number(item.commission || 0);
+
+                const sellingPrice =
+                    Number(item.sellingPrice || 0);
+
+                const farmerEarnings =
                     farmerPrice * quantity;
 
+                const commissionTotal =
+                    commission * quantity;
 
-                revenue += itemRevenue;
+                const productTotal =
+                    sellingPrice * quantity;
 
+                revenue += farmerEarnings;
 
                 countedOrders.add(
                     order._id.toString()
                 );
-
 
                 farmerOrders.push({
 
@@ -121,22 +156,27 @@ exports.getDashboard = async (req, res) => {
                     product:
                         item.product.productName,
 
+                    productId:
+                        item.product._id,
+
                     quantity,
 
                     farmerPrice,
 
-                    commission:
-                        Number(item.commission || 0),
+                    commission,
 
-                    sellingPrice:
-                        Number(item.sellingPrice || 0),
+                    commissionTotal,
 
-                    productTotal:
-                        Number(item.sellingPrice || 0) *
-                        quantity,
+                    sellingPrice,
+
+                    productTotal,
+
+                    farmerEarnings,
 
                     transportFee:
-                        Number(order.transportFee || 0),
+                        Number(
+                            order.transportFee || 0
+                        ),
 
                     delivery:
                         order.delivery,
@@ -144,20 +184,18 @@ exports.getDashboard = async (req, res) => {
                     status:
                         order.status,
 
+                    transactionId:
+                        order.transactionId,
+
                     date:
                         order.createdAt
                 });
             }
         }
 
-
-        const totalOrders =
-            countedOrders.size;
-
-
-        // ----------------------------------------------------
-        // Response
-        // ----------------------------------------------------
+        // ==========================================
+        // RESPONSE
+        // ==========================================
 
         res.json({
 
@@ -166,7 +204,8 @@ exports.getDashboard = async (req, res) => {
             totalProducts:
                 products.length,
 
-            totalOrders,
+            totalOrders:
+                countedOrders.size,
 
             revenue,
 
@@ -174,9 +213,7 @@ exports.getDashboard = async (req, res) => {
 
             orders:
                 farmerOrders
-
         });
-
 
     } catch (error) {
 
@@ -184,7 +221,6 @@ exports.getDashboard = async (req, res) => {
             "FARMER DASHBOARD ERROR:",
             error
         );
-
 
         res.status(500).json({
 
