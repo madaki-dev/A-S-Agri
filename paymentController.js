@@ -299,7 +299,7 @@ const initializePayment = async (req, res) => {
                     currency: "NGN",
 
                     redirect_url:
-                        "https://a-s-ventures.vercel.app/payment-success.html",
+                        "https://as-agri.vercel.app/payment-success.html",
 
                     customer: {
                         email: req.user.email,
