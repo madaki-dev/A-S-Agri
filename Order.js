@@ -1,5 +1,82 @@
 const mongoose = require("mongoose");
 
+const transportBreakdownSchema = new mongoose.Schema(
+    {
+        origin: {
+            type: String,
+            required: true,
+            trim: true
+        },
+
+        destination: {
+            type: String,
+            required: true,
+            trim: true
+        },
+
+        type: {
+            type: String,
+            enum: [
+                "intra-state",
+                "interstate-small",
+                "interstate-weight",
+                "interstate-bulk"
+            ],
+            required: true
+        },
+
+        bags: {
+            type: Number,
+            required: true,
+            min: 0
+        },
+
+        weightKg: {
+            type: Number,
+            required: true,
+            min: 0
+        },
+
+        baseRoutePrice: {
+            type: Number,
+            default: null,
+            min: 0
+        },
+
+        currentRoutePrice: {
+            type: Number,
+            default: null,
+            min: 0
+        },
+
+        truckRatePerTonne: {
+            type: Number,
+            default: null,
+            min: 0
+        },
+
+        dieselPrice: {
+            type: Number,
+            required: true,
+            min: 0
+        },
+
+        fuelMultiplier: {
+            type: Number,
+            required: true,
+            min: 0
+        },
+
+        transportFee: {
+            type: Number,
+            required: true,
+            min: 0
+        }
+    },
+    { _id: false }
+);
+
+
 const orderSchema = new mongoose.Schema({
 
     buyer: {
@@ -42,7 +119,37 @@ const orderSchema = new mongoose.Schema({
         }
     ],
 
+    /*
+     * Total transport paid by the buyer.
+     */
     transportFee: {
+        type: Number,
+        required: true,
+        min: 0
+    },
+
+    /*
+     * Exact transport calculation used when the buyer paid.
+     * This prevents future route/fuel changes from altering old orders.
+     */
+    transportBreakdown: {
+        type: [transportBreakdownSchema],
+        default: []
+    },
+
+    /*
+     * Diesel price used when the transport fee was calculated.
+     */
+    dieselPrice: {
+        type: Number,
+        required: true,
+        min: 0
+    },
+
+    /*
+     * Fuel adjustment multiplier used for this order.
+     */
+    fuelMultiplier: {
         type: Number,
         required: true,
         min: 0
@@ -64,6 +171,7 @@ const orderSchema = new mongoose.Schema({
         type: String,
         enum: [
             "Pending",
+            "Paid",
             "Processing",
             "Shipped",
             "Delivered",
@@ -167,5 +275,5 @@ const orderSchema = new mongoose.Schema({
     timestamps: true
 });
 
-module.exports =
-    mongoose.model("Order", orderSchema);
+
+module.exports = mongoose.model("Order", orderSchema);

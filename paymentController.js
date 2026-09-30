@@ -1,24 +1,26 @@
-const mongoose = require("mongoose");
 const axios = require("axios");
-
-const Cart = require("./Cart");
 const Payment = require("./payment");
 const Order = require("./Order");
 const Product = require("./product");
-const Transport = require("./Transport");
 const User = require("./User");
+const { calculateTransport } = require("./transportCalculator");
 
-const sendOrderEmail = require("./Utils/sendOrderEmail");
+const FLW_SECRET_KEY = process.env.FLW_SECRET_KEY;
 
 
-exports.initializePayment = async (req, res) => {
+/* =========================================================
+   INITIALIZE PAYMENT
+========================================================= */
+
+const initializePayment = async (req, res) => {
     try {
         const {
             fullname,
             phone,
             whatsapp,
             state,
-            address
+            address,
+            cart
         } = req.body;
 
         if (
@@ -29,116 +31,179 @@ exports.initializePayment = async (req, res) => {
             !address
         ) {
             return res.status(400).json({
-                message: "All delivery details are required."
+                message: "All delivery information is required."
             });
         }
 
-        const cart = await Cart.find({
-            buyer: req.user._id
-        }).populate("product");
-
-        if (!cart.length) {
+        if (!Array.isArray(cart) || cart.length === 0) {
             return res.status(400).json({
                 message: "Your cart is empty."
             });
         }
 
+        const normalizedState = state.trim();
+
+        /*
+         * Get the real products from MongoDB.
+         * Never trust prices or stock sent by the frontend.
+         */
+
+        const productIds = cart.map(
+            (item) => item.productId
+        );
+
+        const products = await Product.find({
+            _id: { $in: productIds }
+        });
+
+        if (products.length !== cart.length) {
+            return res.status(400).json({
+                message:
+                    "One or more products in your cart no longer exist."
+            });
+        }
+
+        const productMap = new Map(
+            products.map((product) => [
+                product._id.toString(),
+                product
+            ])
+        );
+
         let productsTotal = 0;
 
         const paymentProducts = [];
 
-        for (const item of cart) {
+        /*
+         * Validate every cart item.
+         */
 
-            if (!item.product) {
+        for (const cartItem of cart) {
+            const product = productMap.get(
+                String(cartItem.productId)
+            );
+
+            if (!product) {
                 return res.status(400).json({
                     message:
                         "A product in your cart no longer exists."
                 });
             }
 
-            const quantity = Number(item.quantity);
-
-            const stock = Number(
-                item.product.stock
-            );
+            const quantity = Number(cartItem.quantity);
 
             if (
                 !Number.isInteger(quantity) ||
-                quantity < 1
+                quantity <= 0
             ) {
                 return res.status(400).json({
                     message:
-                        `Invalid quantity for ${item.product.productName}.`
+                        `Invalid quantity for ${product.productName}.`
                 });
             }
 
-            if (stock <= 0) {
+            if (quantity > product.stock) {
                 return res.status(400).json({
                     message:
-                        `${item.product.productName} is out of stock.`
+                        `Only ${product.stock} unit(s) of ${product.productName} are available.`
                 });
             }
 
-            if (quantity > stock) {
+            const sellingPrice = Number(
+                product.sellingPrice
+            );
+
+            if (
+                !Number.isFinite(sellingPrice) ||
+                sellingPrice < 0
+            ) {
                 return res.status(400).json({
                     message:
-                        `${item.product.productName} only has ${stock} item(s) available.`
+                        `Invalid price for ${product.productName}.`
                 });
             }
 
-            const farmerPrice =
-                Number(item.product.farmerPrice);
+            const farmerPrice = Number(
+                product.farmerPrice
+            );
 
-            const commission =
-                Number(item.product.commission);
-
-            const sellingPrice =
-                Number(item.product.sellingPrice);
+            const commission = Number(
+                product.commission
+            );
 
             if (
                 !Number.isFinite(farmerPrice) ||
-                !Number.isFinite(commission) ||
-                !Number.isFinite(sellingPrice)
+                farmerPrice < 0
             ) {
                 return res.status(400).json({
                     message:
-                        `Invalid price information for ${item.product.productName}.`
+                        `Invalid farmer price for ${product.productName}.`
                 });
             }
 
-            productsTotal +=
+            if (
+                !Number.isFinite(commission) ||
+                commission < 0
+            ) {
+                return res.status(400).json({
+                    message:
+                        `Invalid commission for ${product.productName}.`
+                });
+            }
+
+            const itemTotal =
                 sellingPrice * quantity;
 
+            productsTotal += itemTotal;
+
             paymentProducts.push({
-                product: item.product._id,
+                product: product._id,
                 quantity,
+                farmer: product.farmer,
                 farmerPrice,
                 commission,
                 sellingPrice
             });
         }
 
-        const normalizedState =
-            state.trim();
 
-        const transport =
-            await Transport.findOne({
-                state: {
-                    $regex:
-                        `^${normalizedState}$`,
-                    $options: "i"
+        /* =====================================================
+           TRANSPORT CALCULATION
+        ===================================================== */
+
+        let transportResult;
+
+        try {
+            const transportItems = cart.map(
+                (cartItem) => {
+                    const product = productMap.get(
+                        String(cartItem.productId)
+                    );
+
+                    return {
+                        product,
+                        quantity: Number(
+                            cartItem.quantity
+                        )
+                    };
                 }
-            });
+            );
 
-        if (!transport) {
+            transportResult =
+                await calculateTransport(
+                    transportItems,
+                    normalizedState
+                );
+
+        } catch (transportError) {
             return res.status(400).json({
-                message:
-                    "Transport price is not available for this state."
+                message: transportError.message
             });
         }
 
-        const transportFee =
-            Number(transport.transportPrice);
+        const transportFee = Number(
+            transportResult.transportFee
+        );
 
         if (
             !Number.isFinite(transportFee) ||
@@ -153,11 +218,32 @@ exports.initializePayment = async (req, res) => {
         const totalAmount =
             productsTotal + transportFee;
 
+        if (
+            !Number.isFinite(totalAmount) ||
+            totalAmount <= 0
+        ) {
+            return res.status(400).json({
+                message:
+                    "Invalid payment amount."
+            });
+        }
+
+
+        /* =====================================================
+           TRANSACTION REFERENCE
+        ===================================================== */
+
         const tx_ref =
             `AS-${Date.now()}-${req.user._id}`;
 
+
+        /* =====================================================
+           SAVE PAYMENT
+        ===================================================== */
+
         const savedPayment =
             await Payment.create({
+
                 buyer: req.user._id,
 
                 tx_ref,
@@ -181,11 +267,25 @@ exports.initializePayment = async (req, res) => {
 
                 transportFee,
 
+                transportBreakdown:
+                    transportResult.transportBreakdown,
+
+                dieselPrice:
+                    transportResult.dieselPrice,
+
+                fuelMultiplier:
+                    transportResult.fuelMultiplier,
+
                 products:
                     paymentProducts,
 
                 status: "Pending"
             });
+
+
+        /* =====================================================
+           FLUTTERWAVE
+        ===================================================== */
 
         const flutterwaveResponse =
             await axios.post(
@@ -194,39 +294,42 @@ exports.initializePayment = async (req, res) => {
                 {
                     tx_ref,
 
-                    amount:
-                        totalAmount,
+                    amount: totalAmount,
 
-                    currency:
-                        "NGN",
+                    currency: "NGN",
 
                     redirect_url:
-                        `${process.env.FRONTEND_URL}/payment-success.html`,
+                        "https://a-s-ventures.vercel.app/payment-success.html",
 
                     customer: {
-                        email:
-                            req.user.email,
-
-                        name:
-                            fullname.trim(),
-
+                        email: req.user.email,
                         phonenumber:
-                            phone.trim()
+                            phone.trim(),
+                        name:
+                            fullname.trim()
                     },
 
                     customizations: {
-                        title:
-                            "A&S Agri",
-
+                        title: "A&S Agri",
                         description:
-                            "Agricultural marketplace purchase"
+                            "Agricultural marketplace order",
+                        logo:
+                            "https://as-agri.vercel.app/favicon.ico"
+                    },
+
+                    meta: {
+                        paymentId:
+                            savedPayment._id.toString(),
+
+                        buyerId:
+                            req.user._id.toString()
                     }
                 },
 
                 {
                     headers: {
                         Authorization:
-                            `Bearer ${process.env.FLW_SECRET_KEY}`,
+                            `Bearer ${FLW_SECRET_KEY}`,
 
                         "Content-Type":
                             "application/json"
@@ -234,14 +337,12 @@ exports.initializePayment = async (req, res) => {
                 }
             );
 
-        const paymentLink =
-            flutterwaveResponse
-                .data
-                ?.data
-                ?.link;
 
-        if (!paymentLink) {
-
+        if (
+            !flutterwaveResponse.data ||
+            flutterwaveResponse.data.status !==
+            "success"
+        ) {
             await Payment.findByIdAndUpdate(
                 savedPayment._id,
                 {
@@ -249,53 +350,64 @@ exports.initializePayment = async (req, res) => {
                 }
             );
 
-            return res.status(500).json({
+            return res.status(400).json({
                 message:
-                    "Flutterwave did not return a payment link."
+                    "Unable to initialize payment."
             });
         }
 
-        res.json({
-            success: true,
 
-            paymentLink,
+        return res.status(200).json({
+
+            message:
+                "Payment initialized successfully.",
+
+            paymentId:
+                savedPayment._id,
 
             tx_ref,
+
+            paymentLink:
+                flutterwaveResponse.data.data.link,
 
             amount:
                 totalAmount,
 
-            paymentId:
-                savedPayment._id
+            productsTotal,
+
+            transportFee,
+
+            transportBreakdown:
+                transportResult.transportBreakdown
         });
+
 
     } catch (error) {
 
         console.error(
-            "INITIALIZE PAYMENT ERROR:",
+            "Initialize payment error:",
             error.response?.data ||
-            error.message ||
-            error
+            error.message
         );
 
-        res.status(500).json({
+        return res.status(500).json({
             message:
-                error.response?.data?.message ||
-                error.message ||
-                "Payment initialization failed."
+                "Failed to initialize payment."
         });
     }
 };
 
 
-exports.verifyPayment = async (req, res) => {
+/* =========================================================
+   VERIFY PAYMENT
+========================================================= */
 
-    let session;
+const verifyPayment = async (req, res) => {
 
     try {
 
-        const transactionId =
-            String(req.params.id);
+        const { transactionId } =
+            req.params;
 
         if (!transactionId) {
             return res.status(400).json({
@@ -305,9 +417,9 @@ exports.verifyPayment = async (req, res) => {
         }
 
 
-        // ==========================================
-        // VERIFY PAYMENT WITH FLUTTERWAVE
-        // ==========================================
+        /* =====================================================
+           VERIFY WITH FLUTTERWAVE
+        ===================================================== */
 
         const flutterwaveResponse =
             await axios.get(
@@ -316,27 +428,37 @@ exports.verifyPayment = async (req, res) => {
                 {
                     headers: {
                         Authorization:
-                            `Bearer ${process.env.FLW_SECRET_KEY}`
+                            `Bearer ${FLW_SECRET_KEY}`,
+
+                        "Content-Type":
+                            "application/json"
                     }
                 }
             );
 
 
-        const paymentData =
-            flutterwaveResponse
-                .data
-                ?.data;
+        const verification =
+            flutterwaveResponse.data;
 
-        if (!paymentData) {
+
+        if (
+            !verification ||
+            verification.status !== "success" ||
+            !verification.data
+        ) {
             return res.status(400).json({
                 message:
-                    "Flutterwave returned no payment data."
+                    "Payment verification failed."
             });
         }
 
 
+        const transaction =
+            verification.data;
+
+
         if (
-            paymentData.status !==
+            transaction.status !==
             "successful"
         ) {
             return res.status(400).json({
@@ -347,8 +469,7 @@ exports.verifyPayment = async (req, res) => {
 
 
         if (
-            paymentData.currency !==
-            "NGN"
+            transaction.currency !== "NGN"
         ) {
             return res.status(400).json({
                 message:
@@ -357,25 +478,16 @@ exports.verifyPayment = async (req, res) => {
         }
 
 
-        const tx_ref =
-            paymentData.tx_ref;
-
-        if (!tx_ref) {
-            return res.status(400).json({
-                message:
-                    "Transaction reference was not returned."
-            });
-        }
-
-
-        // ==========================================
-        // FIND OUR PAYMENT RECORD
-        // ==========================================
+        /* =====================================================
+           FIND SAVED PAYMENT
+        ===================================================== */
 
         const savedPayment =
             await Payment.findOne({
-                tx_ref
+                tx_ref:
+                    transaction.tx_ref
             });
+
 
         if (!savedPayment) {
             return res.status(404).json({
@@ -385,7 +497,12 @@ exports.verifyPayment = async (req, res) => {
         }
 
 
+        /* =====================================================
+           AUTHORIZATION
+        ===================================================== */
+
         if (
+            req.user &&
             savedPayment.buyer.toString() !==
             req.user._id.toString()
         ) {
@@ -396,9 +513,9 @@ exports.verifyPayment = async (req, res) => {
         }
 
 
-        // ==========================================
-        // PREVENT DUPLICATE PROCESSING
-        // ==========================================
+        /* =====================================================
+           PREVENT DOUBLE VERIFICATION
+        ===================================================== */
 
         if (
             savedPayment.status ===
@@ -407,12 +524,11 @@ exports.verifyPayment = async (req, res) => {
 
             const existingOrder =
                 await Order.findOne({
-                    transactionId
+                    transactionId:
+                        transaction.id
                 });
 
-            return res.json({
-                success: true,
-
+            return res.status(200).json({
                 message:
                     "Payment has already been verified.",
 
@@ -422,116 +538,250 @@ exports.verifyPayment = async (req, res) => {
         }
 
 
-        const flutterwaveAmount =
-            Number(paymentData.amount);
+        /* =====================================================
+           VERIFY AMOUNT
+        ===================================================== */
+
+        const paidAmount =
+            Number(transaction.amount);
 
         const expectedAmount =
             Number(savedPayment.amount);
 
 
         if (
-            Math.abs(
-                flutterwaveAmount -
-                expectedAmount
-            ) > 0.01
+            !Number.isFinite(paidAmount) ||
+            paidAmount !== expectedAmount
         ) {
             return res.status(400).json({
                 message:
-                    "Payment amount does not match the expected amount."
+                    "Payment amount does not match the order amount."
             });
         }
 
 
-        const existingOrder =
-            await Order.findOne({
-                transactionId
+        /* =====================================================
+           GET FARMER INFORMATION
+        ===================================================== */
+
+        const farmerIds =
+            savedPayment.products.map(
+                (item) => item.farmer
+            );
+
+        const farmers =
+            await User.find({
+                _id: {
+                    $in: farmerIds
+                }
             });
 
-        if (existingOrder) {
-            return res.json({
-                success: true,
 
-                message:
-                    "Order already exists for this transaction.",
-
-                order:
-                    existingOrder
-            });
-        }
-
-
-        // ==========================================
-        // START DATABASE TRANSACTION
-        // ==========================================
-
-        session =
-            await mongoose.startSession();
-
-        session.startTransaction();
+        const farmerMap =
+            new Map(
+                farmers.map(
+                    (farmer) => [
+                        farmer._id.toString(),
+                        farmer
+                    ]
+                )
+            );
 
 
-        const orderProducts = [];
+        /* =====================================================
+           BUILD ORDER PRODUCTS
+        ===================================================== */
+
+        const orderProducts =
+            savedPayment.products.map(
+                (item) => ({
+
+                    product:
+                        item.product,
+
+                    quantity:
+                        item.quantity,
+
+                    farmer:
+                        item.farmer,
+
+                    farmerPrice:
+                        item.farmerPrice,
+
+                    commission:
+                        item.commission,
+
+                    sellingPrice:
+                        item.sellingPrice
+                })
+            );
 
 
-        // ==========================================
-        // CHECK STOCK
-        // ==========================================
+        /* =====================================================
+           BUILD FARMER PAYOUTS
+        ===================================================== */
+
+        const farmerPayoutMap =
+            new Map();
+
 
         for (
-            const item
-            of savedPayment.products
+            const item of
+            savedPayment.products
         ) {
 
-            const product =
-                await Product.findById(
-                    item.product
-                ).session(session);
+            const farmerId =
+                item.farmer.toString();
 
-
-            if (!product) {
-                throw new Error(
-                    "One of the purchased products no longer exists."
+            const farmer =
+                farmerMap.get(
+                    farmerId
                 );
-            }
+
+
+            const farmerAmount =
+                Number(item.farmerPrice) *
+                Number(item.quantity);
+
+
+            const commissionAmount =
+                Number(item.commission) *
+                Number(item.quantity);
 
 
             if (
-                Number(item.quantity) >
-                Number(product.stock)
+                !farmerPayoutMap.has(
+                    farmerId
+                )
             ) {
-                throw new Error(
-                    `${product.productName} no longer has enough stock.`
+
+                farmerPayoutMap.set(
+                    farmerId,
+                    {
+                        farmer:
+                            item.farmer,
+
+                        farmerName:
+                            farmer?.fullName ||
+                            farmer?.name ||
+                            farmer?.fullname ||
+                            "",
+
+                        farmerPhone:
+                            farmer?.phone ||
+                            "",
+
+                        accountNumber:
+                            farmer?.accountNumber ||
+                            "",
+
+                        bankName:
+                            farmer?.bankName ||
+                            "",
+
+                        accountName:
+                            farmer?.accountName ||
+                            "",
+
+                        amount:
+                            0,
+
+                        commission:
+                            0,
+
+                        status:
+                            "Pending",
+
+                        paidAt:
+                            null
+                    }
                 );
             }
 
 
-            orderProducts.push({
+            const payout =
+                farmerPayoutMap.get(
+                    farmerId
+                );
 
-                product:
-                    product._id,
 
-                quantity:
-                    item.quantity,
+            payout.amount +=
+                farmerAmount;
 
-                farmerPrice:
-                    item.farmerPrice,
-
-                commission:
-                    item.commission,
-
-                sellingPrice:
-                    item.sellingPrice
-            });
+            payout.commission +=
+                commissionAmount;
         }
 
 
-        // ==========================================
-        // DECREASE STOCK
-        // ==========================================
+        const farmerPayouts =
+            Array.from(
+                farmerPayoutMap.values()
+            );
+
+
+        /* =====================================================
+           CREATE ORDER
+        ===================================================== */
+
+        const order =
+            await Order.create({
+
+                buyer:
+                    savedPayment.buyer,
+
+                products:
+                    orderProducts,
+
+                transportFee:
+                    savedPayment.transportFee,
+
+                transportBreakdown:
+                    savedPayment.transportBreakdown,
+
+                dieselPrice:
+                    savedPayment.dieselPrice,
+
+                fuelMultiplier:
+                    savedPayment.fuelMultiplier,
+
+                totalAmount:
+                    savedPayment.amount,
+
+                transactionId:
+                    String(transaction.id),
+
+                status:
+                    "Paid",
+
+                delivery: {
+
+                    fullname:
+                        savedPayment.fullname,
+
+                    phone:
+                        savedPayment.phone,
+
+                    whatsapp:
+                        savedPayment.whatsapp,
+
+                    state:
+                        savedPayment.state,
+
+                    address:
+                        savedPayment.address
+                },
+
+                farmerPayouts
+            });
+
+
+        /* =====================================================
+           REDUCE PRODUCT STOCK
+        ===================================================== */
 
         for (
-            const item
-            of savedPayment.products
+            const item of
+            savedPayment.products
         ) {
 
             const updatedProduct =
@@ -543,447 +793,53 @@ exports.verifyPayment = async (req, res) => {
 
                         stock: {
                             $gte:
-                                Number(
-                                    item.quantity
-                                )
+                                item.quantity
                         }
                     },
 
                     {
                         $inc: {
                             stock:
-                                -Number(
-                                    item.quantity
-                                )
+                                -item.quantity
                         }
                     },
 
                     {
-                        new: true,
-
-                        session
+                        new: true
                     }
                 );
 
 
             if (!updatedProduct) {
-                throw new Error(
-                    "Product stock changed while processing the order."
+
+                console.error(
+                    `Unable to reduce stock for product ${item.product}`
                 );
             }
         }
 
 
-        // ==========================================
-        // CREATE ORDER
-        // ==========================================
-
-        const createdOrders =
-            await Order.create(
-
-                [
-                    {
-                        buyer:
-                            req.user._id,
-
-                        products:
-                            orderProducts,
-
-                        transportFee:
-                            savedPayment.transportFee,
-
-                        totalAmount:
-                            savedPayment.amount,
-
-                        transactionId:
-                            transactionId,
-
-                        status:
-                            "Processing",
-
-                        delivery: {
-
-                            fullname:
-                                savedPayment.fullname,
-
-                            phone:
-                                savedPayment.phone,
-
-                            whatsapp:
-                                savedPayment.whatsapp,
-
-                            state:
-                                savedPayment.state,
-
-                            address:
-                                savedPayment.address
-                        }
-                    }
-                ],
-
-                {
-                    session
-                }
-            );
-
-
-        const order =
-            createdOrders[0];
-
-
-        // ==========================================
-        // MARK PAYMENT SUCCESSFUL
-        // ==========================================
+        /* =====================================================
+           MARK PAYMENT SUCCESSFUL
+        ===================================================== */
 
         savedPayment.status =
             "Successful";
 
         savedPayment.transactionId =
-            transactionId;
+            String(transaction.id);
 
+        await savedPayment.save();
 
-        await savedPayment.save({
-            session
-        });
 
+        /* =====================================================
+           RESPONSE
+        ===================================================== */
 
-        // ==========================================
-        // CLEAR BUYER CART
-        // ==========================================
-
-        await Cart.deleteMany(
-            {
-                buyer:
-                    req.user._id
-            },
-
-            {
-                session
-            }
-        );
-
-
-        // ==========================================
-        // COMMIT EVERYTHING
-        // ==========================================
-
-        await session.commitTransaction();
-
-
-        // ==========================================
-        // SEND EMAIL NOTIFICATIONS
-        //
-        // IMPORTANT:
-        // This happens AFTER the transaction commits.
-        // An email failure will NOT cancel the order.
-        // ==========================================
-
-        try {
-
-            // Get the complete order with
-            // farmer information.
-            const populatedOrder =
-                await Order.findById(
-                    order._id
-                )
-                    .populate({
-                        path:
-                            "products.product",
-
-                        populate: {
-                            path:
-                                "farmer",
-
-                            select:
-                                "fullName email phone"
-                        }
-                    })
-                    .populate(
-                        "buyer",
-                        "fullName email phone"
-                    );
-
-
-            if (populatedOrder) {
-
-                // ==================================
-                // GROUP PRODUCTS BY FARMER
-                // ==================================
-
-                const farmerGroups =
-                    new Map();
-
-
-                for (
-                    const item
-                    of populatedOrder.products
-                ) {
-
-                    const product =
-                        item.product;
-
-
-                    if (
-                        !product ||
-                        !product.farmer
-                    ) {
-                        continue;
-                    }
-
-
-                    const farmer =
-                        product.farmer;
-
-
-                    const farmerId =
-                        farmer._id.toString();
-
-
-                    if (
-                        !farmerGroups.has(
-                            farmerId
-                        )
-                    ) {
-
-                        farmerGroups.set(
-                            farmerId,
-
-                            {
-                                farmer,
-
-                                items: []
-                            }
-                        );
-                    }
-
-
-                    farmerGroups
-                        .get(farmerId)
-                        .items
-                        .push(item);
-                }
-
-
-                // ==================================
-                // SEND EMAIL TO EACH FARMER
-                // ==================================
-
-                const farmerEmails = [];
-
-
-                for (
-                    const [
-                        farmerId,
-                        group
-                    ]
-                    of farmerGroups
-                ) {
-
-                    if (
-                        !group.farmer.email
-                    ) {
-                        console.warn(
-                            `Farmer ${farmerId} has no email address.`
-                        );
-
-                        continue;
-                    }
-
-
-                    farmerEmails.push(
-                        sendOrderEmail({
-                            to:
-                                group.farmer.email,
-
-                            recipientName:
-                                group.farmer.fullName,
-
-                            order:
-                                populatedOrder,
-
-                            items:
-                                group.items,
-
-                            recipientType:
-                                "Farmer"
-                        })
-                    );
-                }
-
-
-                // ==================================
-                // FIND ADMINS
-                // ==================================
-
-                const admins =
-                    await User.find({
-                        role:
-                            "Admin"
-                    }).select(
-                        "fullName email"
-                    );
-
-
-                const adminRecipients =
-                    new Map();
-
-
-                // Admins registered in MongoDB
-                for (
-                    const admin
-                    of admins
-                ) {
-
-                    if (
-                        admin.email
-                    ) {
-
-                        adminRecipients.set(
-                            admin.email.toLowerCase(),
-
-                            {
-                                email:
-                                    admin.email,
-
-                                name:
-                                    admin.fullName
-                            }
-                        );
-                    }
-                }
-
-
-                // Admin emails from .env
-                const envAdminEmails =
-                    (
-                        process.env.ADMIN_EMAILS ||
-                        ""
-                    )
-                        .split(",")
-                        .map(
-                            email =>
-                                email.trim()
-                        )
-                        .filter(Boolean);
-
-
-                for (
-                    const email
-                    of envAdminEmails
-                ) {
-
-                    const normalizedEmail =
-                        email.toLowerCase();
-
-
-                    if (
-                        !adminRecipients.has(
-                            normalizedEmail
-                        )
-                    ) {
-
-                        adminRecipients.set(
-                            normalizedEmail,
-
-                            {
-                                email,
-
-                                name:
-                                    "Admin"
-                            }
-                        );
-                    }
-                }
-
-
-                // ==================================
-                // SEND EMAIL TO EACH ADMIN
-                // ==================================
-
-                const adminEmails =
-                    Array.from(
-                        adminRecipients.values()
-                    )
-                        .map(admin =>
-                            sendOrderEmail({
-
-                                to:
-                                    admin.email,
-
-                                recipientName:
-                                    admin.name,
-
-                                order:
-                                    populatedOrder,
-
-                                items:
-                                    populatedOrder.products,
-
-                                recipientType:
-                                    "Admin"
-                            })
-                        );
-
-
-                // ==================================
-                // SEND ALL EMAILS
-                //
-                // Promise.allSettled means one
-                // failed email doesn't prevent
-                // the others from being sent.
-                // ==================================
-
-                const emailResults =
-                    await Promise.allSettled([
-                        ...farmerEmails,
-                        ...adminEmails
-                    ]);
-
-
-                emailResults.forEach(
-                    result => {
-
-                        if (
-                            result.status ===
-                            "rejected"
-                        ) {
-
-                            console.error(
-                                "ORDER EMAIL FAILED:",
-                                result.reason
-                            );
-                        }
-                    }
-                );
-
-
-                console.log(
-                    `Order ${populatedOrder._id}: email notifications processed.`
-                );
-            }
-
-        } catch (emailError) {
-
-            // Email errors must NEVER make a
-            // successful order look unsuccessful.
-
-            console.error(
-                "ORDER EMAIL NOTIFICATION ERROR:",
-                emailError
-            );
-        }
-
-
-        // ==========================================
-        // SEND SUCCESS RESPONSE
-        // ==========================================
-
-        res.json({
-
-            success: true,
+        return res.status(200).json({
 
             message:
-                "Payment verified and order created successfully.",
+                "Payment verified successfully.",
 
             order
         });
@@ -991,43 +847,25 @@ exports.verifyPayment = async (req, res) => {
 
     } catch (error) {
 
-        if (session) {
-
-            try {
-
-                await session.abortTransaction();
-
-            } catch (abortError) {
-
-                console.error(
-                    "TRANSACTION ABORT ERROR:",
-                    abortError
-                );
-            }
-        }
-
-
         console.error(
-            "VERIFY PAYMENT ERROR:",
+            "Verify payment error:",
             error.response?.data ||
-            error.message ||
-            error
+            error.message
         );
 
-
-        res.status(500).json({
-
+        return res.status(500).json({
             message:
-                error.response?.data?.message ||
-                error.message ||
-                "Payment verification failed."
+                "Failed to verify payment."
         });
-
-
-    } finally {
-
-        if (session) {
-            session.endSession();
-        }
     }
+};
+
+
+/* =========================================================
+   EXPORTS
+========================================================= */
+
+module.exports = {
+    initializePayment,
+    verifyPayment
 };

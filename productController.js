@@ -1,16 +1,19 @@
 const Product = require("./product");
 
 
+const Product = require("./product");
+
 exports.createProduct = async (req, res) => {
     try {
-
         const {
             productName,
             category,
-            quantity,
             location,
             description,
-            price
+            price,
+            quantity,
+            priceUnit,
+            weightPerUnitKg
         } = req.body;
 
         if (
@@ -34,6 +37,7 @@ exports.createProduct = async (req, res) => {
 
         const numericQuantity = Number(quantity);
         const farmerPrice = Number(price);
+        const numericWeight = Number(weightPerUnitKg);
 
         if (
             !Number.isInteger(numericQuantity) ||
@@ -53,35 +57,60 @@ exports.createProduct = async (req, res) => {
             });
         }
 
+        if (
+            !Number.isFinite(numericWeight) ||
+            numericWeight <= 0
+        ) {
+            return res.status(400).json({
+                message: "Weight per unit must be greater than 0."
+            });
+        }
+
+        const allowedUnits = [
+            "bag",
+            "100kg bag",
+            "50kg bag",
+            "kg",
+            "ton",
+            "crate",
+            "bunch",
+            "unit"
+        ];
+
+        if (!allowedUnits.includes(priceUnit)) {
+            return res.status(400).json({
+                message: "Invalid price unit."
+            });
+        }
+
         // A&S commission = 10%
-        const commission = farmerPrice * 0.10;
+        const commission = Math.round(farmerPrice * 0.10);
 
         const sellingPrice =
             farmerPrice + commission;
 
-        const product = await Product.create({
+        // Cloudinary/multer-storage gives us the uploaded image URL
+        const imageUrl = req.file.path;
 
-            farmer: req.user._id,
+        const product = await Product.create({
+            farmer: req.user.id,
 
             productName: productName.trim(),
-
             category: category.trim(),
-
-            quantity: numericQuantity,
-
-            stock: numericQuantity,
-
             location: location.trim(),
-
             description: description.trim(),
 
-            image: req.file.path,
+            image: imageUrl,
+
+            quantity: numericQuantity,
+            stock: numericQuantity,
 
             farmerPrice,
-
             commission,
+            sellingPrice,
 
-            sellingPrice
+            priceUnit,
+            weightPerUnitKg: numericWeight
         });
 
         res.status(201).json({
@@ -90,7 +119,6 @@ exports.createProduct = async (req, res) => {
         });
 
     } catch (error) {
-
         console.error("CREATE PRODUCT ERROR:", error);
 
         res.status(500).json({

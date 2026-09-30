@@ -97,8 +97,6 @@ app.use(
     contactRoutes
 );
 
-app.use("/api/admin", adminRoutes);
-
 
 // --------------------------------------------------
 // Health Check
