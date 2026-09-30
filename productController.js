@@ -1,8 +1,5 @@
 const Product = require("./product");
 
-
-const Product = require("./product");
-
 exports.createProduct = async (req, res) => {
     try {
         const {
